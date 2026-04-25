@@ -87,6 +87,7 @@ export default async function LicensesPage() {
               <thead>
                 <tr className="border-b border-zinc-800/50 bg-zinc-900/50">
                   <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">License Key</th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Application</th>
                   <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Plan</th>
                   <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">HWID</th>
                   <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Devices</th>
@@ -105,6 +106,9 @@ export default async function LicensesPage() {
                         <CopyButton text={license.key} />
                       </div>
                       {license.note && <p className="text-xs text-zinc-500 mt-0.5">{license.note}</p>}
+                    </td>
+                    <td className="px-4 py-4">
+                      <span className="text-sm text-zinc-400">{license.application_name || "Unknown"}</span>
                     </td>
                     <td className="px-4 py-4">
                       <span className="px-2.5 py-1 rounded-lg bg-zinc-500/10 text-zinc-400 text-xs font-semibold uppercase border border-zinc-500/20">{license.plan}</span>
