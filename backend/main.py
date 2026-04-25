@@ -1537,7 +1537,7 @@ def get_app_credentials(app_id: str):
         "app_key": row["app_key"],
         "app_secret": row["app_secret"],
         "version": row["version"],
-        "client_portal": "https://rinoxxauth.onrender.com",
+        "client_portal": "http://127.0.0.1:8000",
     })
 
 @app.delete("/api/admin/apps/{app_id}")
