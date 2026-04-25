@@ -62,7 +62,7 @@ export default async function AppsPage() {
         </Card>
       </div>
 
-      {/* ✅ SINGLE TABLE */}
+      {/* Applications Table */}
       <Card className="overflow-hidden">
         <div className="p-4 border-b border-zinc-800/50">
           <p className="text-sm text-zinc-400 flex items-center gap-2">
@@ -122,10 +122,8 @@ export default async function AppsPage() {
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center justify-center gap-2">
-                        {/* ✅ View Credentials Button - Client Component */}
                         <CredentialsButton appId={app.id} />
                         
-                        {/* Client Portal */}
                         <a 
                           href={env.BACKEND_BASE_URL} 
                           target="_blank" 
@@ -136,7 +134,6 @@ export default async function AppsPage() {
                           <ExternalLink className="h-4 w-4" />
                         </a>
                         
-                        {/* Delete */}
                         <form action={async (formData: FormData) => {
                           "use server";
                           const appId = String(formData.get("app_id") ?? "");
