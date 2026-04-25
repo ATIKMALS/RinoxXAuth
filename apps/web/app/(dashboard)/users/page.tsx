@@ -16,6 +16,8 @@ import {
   Play
 } from "lucide-react";
 import { UsersClientWrapper } from "./client-wrapper";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
 // ============================================
 // ANIMATED STAT CARD COMPONENT
@@ -53,9 +55,10 @@ function StatCard({
 // ============================================
 // DATA FETCHING
 // ============================================
-async function getApps() {
+async function getApps(createdBy?: string) {
   try {
-    const res = await fetch(`${env.BACKEND_BASE_URL}/api/apps`, { cache: "no-store" });
+    const query = createdBy ? `?created_by=${encodeURIComponent(createdBy)}` : "";
+    const res = await fetch(`${env.BACKEND_BASE_URL}/api/apps${query}`, { cache: "no-store" });
     if (!res.ok) return [];
     const data = await res.json();
     return data.data || [];
@@ -75,7 +78,9 @@ async function getUsers() {
 // MAIN PAGE
 // ============================================
 export default async function UsersPage() {
-  const [users, apps] = await Promise.all([getUsers(), getApps()]);
+  const session = await getServerSession(authOptions);
+  const currentUser = session?.user?.username;
+  const [users, apps] = await Promise.all([getUsers(), getApps(currentUser)]);
   const activeUsers = users.filter((u: any) => u.status === "active").length;
   const expiredUsers = users.filter((u: any) => new Date(u.expires_at) < new Date()).length;
   const retentionRate = users.length ? Math.round((activeUsers / users.length) * 100) : 0;
@@ -93,7 +98,6 @@ export default async function UsersPage() {
           </h1>
           <p className="text-sm text-zinc-400 mt-1">Manage and monitor your application users</p>
         </div>
-        {/* ✅ Only Client Wrapper (Create + Export + Import) - NO extra Export */}
         <UsersClientWrapper users={users} apps={apps} />
       </div>
 
