@@ -1,0 +1,107 @@
+C# WinForms Auth + License System Guide
+
+  -------------------------------
+  1. Form1.cs (Main Form Setup)
+  -------------------------------
+
+Step 1: Variable declare (Form1 class er vitore)
+
+private AuthClient client;
+
+Step 2: Constructor e initialize (Form1())
+
+client = new AuthClient( appName: “Rinox”, ownerIdOrAppKey: “YOUR_KEY”,
+secret: “YOUR_SECRET”, version: “1.0.0”, apiBaseUrl:
+“http://127.0.0.1:8000” );
+
+  ------------------------------
+  2. UI Elements (Design View)
+  ------------------------------
+
+Add these controls:
+
+Textbox: - txtUsername - txtPassword - txtLicense
+
+Label: - lblStatus
+
+Button: - guna2Button1 (Login Button)
+
+  ----------------------
+  3. Login Button Code
+  ----------------------
+
+Double click button → paste this:
+
+private async void guna2Button1_Click(object sender, EventArgs e) {
+
+lblStatus.Text = “Loading…”;
+
+    if (!await client.Init())
+    {
+        lblStatus.Text = "Init failed: " + client.Message;
+        return;
+    }
+
+    string username = txtUsername.Text;
+    string password = txtPassword.Text;
+
+    if (await client.Login(username, password))
+    {
+        lblStatus.Text = "Login Success";
+
+        if (await client.License(txtLicense.Text))
+        {
+            lblStatus.Text = "License Valid";
+
+            Form2 f = new Form2();
+            f.Show();
+            this.Hide();
+        }
+        else
+        {
+            MessageBox.Show("License Invalid: " + client.Message);
+        }
+    }
+    else
+    {
+        lblStatus.Text = "Login Failed";
+        MessageBox.Show(client.Message);
+    }
+
+}
+
+  ----------------------------------
+  4. AuthClient.cs (Backend Logic)
+  ----------------------------------
+
+Add this method inside AuthClient:
+
+public async Task License(string key) { var payload = new
+Dictionary<string, object> { [“type”] = “license”, [“appname”] =
+_appName, [“ownerid”] = _ownerIdOrAppKey, [“secret”] = _secret, [“key”]
+= key, [“hwid”] = GetHwid() };
+
+    await SendAsync(payload);
+    return IsSuccess;
+
+}
+
+  ------------------------
+  5. Common Problems Fix
+  ------------------------
+
+Problem: NullReferenceException Fix: client = new AuthClient(…) must be
+used (no ‘var’)
+
+Problem: License not found Fix: Rebuild solution (Build → Rebuild)
+
+Problem: API not working Fix: Server must be running on
+http://127.0.0.1:8000
+
+  ---------
+  DONE ✅
+  ---------
+
+Flow:
+
+App Start → Init → Login → License → Dashboard
