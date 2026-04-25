@@ -38,14 +38,21 @@ export function CreateUserForm({ onClose, onSuccess }: CreateUserFormProps) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [totalDuration, setTotalDuration] = useState("30d");
 
-  // ✅ FIXED: Use CLIENT_BACKEND_BASE_URL for fetching apps
   const fetchApps = useCallback(async () => {
     try {
       setIsLoadingApps(true);
       setFetchError(null);
+      
+      // ✅ Get current user from session
+      const sessionRes = await fetch('/api/auth/session');
+      const sessionData = await sessionRes.json().catch(() => ({}));
+      const currentUser = sessionData?.user?.username || '';
+      
+      // ✅ Send created_by to filter apps
+      const query = currentUser ? `?created_by=${encodeURIComponent(currentUser)}` : '';
+      const response = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps${query}`);
 
-      const response = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps`);
-
+      // ✅ Check if response is OK
       if (!response.ok) throw new Error(`Failed (${response.status})`);
 
       const data = await response.json();
@@ -153,7 +160,7 @@ export function CreateUserForm({ onClose, onSuccess }: CreateUserFormProps) {
           <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3">
             <div className="flex items-center justify-between">
               <p className="text-sm text-amber-400 flex items-center gap-2">
-                <AlertCircle className="h-4 w-4" /> Failed to load
+                <AlertCircle className="h-4 w-4" /> Failed to load: {fetchError}
               </p>
               <button type="button" onClick={fetchApps} className="p-2 rounded-lg bg-amber-500/10 text-amber-400 hover:bg-amber-500/20">
                 <RefreshCw className="h-4 w-4" />
