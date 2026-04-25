@@ -257,6 +257,8 @@ def _user_to_dict(row: sqlite3.Row) -> dict:
         return None
     return {
         "id": row["id"],
+        "application_id": row["application_id"] if "application_id" in row.keys() else None,
+        "application_name": row["application_name"] if "application_name" in row.keys() else None,
         "username": row["username"],
         "email": row["email"] or "",
         "plan": row["plan"] or "free",
@@ -300,6 +302,7 @@ def _init_db() -> None:
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             email TEXT,
@@ -311,11 +314,13 @@ def _init_db() -> None:
             created_at TEXT NOT NULL,
             last_login TEXT,
             devices INTEGER DEFAULT 0,
-            notes TEXT
+            notes TEXT,
+            FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS licenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
             license_key TEXT UNIQUE NOT NULL,
             user_id INTEGER,
             issued_to TEXT,
@@ -327,6 +332,7 @@ def _init_db() -> None:
             hwid_lock INTEGER NOT NULL DEFAULT 0,
             note TEXT,
             created_at TEXT NOT NULL,
+            FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE SET NULL,
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
         );
 
@@ -346,6 +352,7 @@ def _init_db() -> None:
 
         CREATE TABLE IF NOT EXISTS api_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            application_id INTEGER,
             name TEXT NOT NULL,
             api_key TEXT UNIQUE NOT NULL,
             api_secret TEXT NOT NULL,
@@ -353,7 +360,8 @@ def _init_db() -> None:
             is_active INTEGER NOT NULL DEFAULT 1,
             expires_at TEXT,
             last_used TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS activity_logs (
@@ -393,6 +401,8 @@ def _init_db() -> None:
     # ============================================
     try:
         user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "application_id" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN application_id INTEGER")
         if "last_login" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN last_login TEXT")
         if "devices" not in user_cols:
@@ -404,6 +414,8 @@ def _init_db() -> None:
 
     try:
         lic_cols = {r["name"] for r in conn.execute("PRAGMA table_info(licenses)").fetchall()}
+        if "application_id" not in lic_cols:
+            conn.execute("ALTER TABLE licenses ADD COLUMN application_id INTEGER")
         if "hwid_lock" not in lic_cols:
             conn.execute("ALTER TABLE licenses ADD COLUMN hwid_lock INTEGER NOT NULL DEFAULT 0")
         if "note" not in lic_cols:
@@ -416,6 +428,13 @@ def _init_db() -> None:
             conn.execute("ALTER TABLE licenses ADD COLUMN issued_to TEXT")
     except Exception as e:
         print(f"⚠️ License migration: {e}")
+
+    try:
+        api_key_cols = {r["name"] for r in conn.execute("PRAGMA table_info(api_keys)").fetchall()}
+        if "application_id" not in api_key_cols:
+            conn.execute("ALTER TABLE api_keys ADD COLUMN application_id INTEGER")
+    except Exception as e:
+        print(f"⚠️ API key migration: {e}")
 
     try:
         reseller_cols = {r["name"] for r in conn.execute("PRAGMA table_info(resellers)").fetchall()}
@@ -762,8 +781,8 @@ def sdk_auth(payload: AuthPayload):
             return _error("Username and password are required", 400)
 
         user = conn.execute(
-            "SELECT * FROM users WHERE username = ? AND is_active = 1",
-            (payload.username,),
+            "SELECT * FROM users WHERE username = ? AND application_id = ? AND is_active = 1",
+            (payload.username, app["id"]),
         ).fetchone()
 
         if not user:
@@ -837,8 +856,8 @@ def sdk_auth(payload: AuthPayload):
         print(f"   Searching license: {search_key}")
 
         license_row = conn.execute(
-            "SELECT * FROM licenses WHERE license_key = ? AND is_active = 1",
-            (search_key,),
+            "SELECT * FROM licenses WHERE license_key = ? AND application_id = ? AND is_active = 1",
+            (search_key, app["id"]),
         ).fetchone()
 
         if not license_row:
@@ -880,8 +899,8 @@ def sdk_auth(payload: AuthPayload):
 
         # Find license
         lic = conn.execute(
-            "SELECT * FROM licenses WHERE license_key=? AND is_active=1",
-            (search_key,)
+            "SELECT * FROM licenses WHERE license_key=? AND application_id = ? AND is_active=1",
+            (search_key, app["id"])
         ).fetchone()
 
         if not lic:
@@ -894,17 +913,17 @@ def sdk_auth(payload: AuthPayload):
 
         # Create or get user for this license
         username = f"user_{search_key[:8].replace('-','')}"
-        user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        user = conn.execute("SELECT * FROM users WHERE username=? AND application_id = ?", (username, app["id"])).fetchone()
 
         if not user:
             expires = lic["expires_at"] or (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
             conn.execute(
-                "INSERT INTO users (username,password_hash,plan,is_active,hwid_lock,expires_at,created_at) VALUES (?,?,?,1,0,?,?)",
-                (username, _hash_password(search_key), lic["plan"] or "free", expires, _now_iso()),
+                "INSERT INTO users (application_id, username,password_hash,plan,is_active,hwid_lock,expires_at,created_at) VALUES (?,?,?,?,1,0,?,?)",
+                (app["id"], username, _hash_password(search_key), lic["plan"] or "free", expires, _now_iso()),
             )
             conn.execute("UPDATE licenses SET user_id=last_insert_rowid() WHERE id=?", (lic["id"],))
             conn.commit()
-            user = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+            user = conn.execute("SELECT * FROM users WHERE username=? AND application_id = ?", (username, app["id"])).fetchone()
             _log_activity(conn, "register", "info", f"Auto-created user from license: {username}")
 
         # Update last login
@@ -933,8 +952,8 @@ def sdk_auth(payload: AuthPayload):
             conn.close()
             return _error("Username and password required", 400)
 
-        # Check if username exists
-        if conn.execute("SELECT id FROM users WHERE username=?", (payload.username,)).fetchone():
+        # Check if username exists for this app
+        if conn.execute("SELECT id FROM users WHERE username=? AND application_id = ?", (payload.username, app["id"])).fetchone():
             conn.close()
             return _error("Username already exists", 409)
 
@@ -943,16 +962,16 @@ def sdk_auth(payload: AuthPayload):
             search_key = _normalize(payload.key)
             if search_key.startswith("RinoxAuth-"):
                 search_key = search_key[10:]
-            
+
             lic = conn.execute(
-                "SELECT * FROM licenses WHERE license_key=? AND is_active=1",
-                (search_key,)
+                "SELECT * FROM licenses WHERE license_key=? AND application_id = ? AND is_active=1",
+                (search_key, app["id"]),
             ).fetchone()
-            
+
             if not lic:
                 conn.close()
                 return _error("Invalid license key", 400)
-            
+
             plan = lic["plan"] or "free"
         else:
             plan = "free"
@@ -960,8 +979,8 @@ def sdk_auth(payload: AuthPayload):
         expires_at = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
 
         conn.execute(
-            "INSERT INTO users (username,password_hash,plan,is_active,hwid_lock,expires_at,created_at) VALUES (?,?,?,1,1,?,?)",
-            (payload.username, _hash_password(payload.password), plan, expires_at, _now_iso()),
+            "INSERT INTO users (application_id, username,password_hash,plan,is_active,hwid_lock,expires_at,created_at) VALUES (?,?,?,?,1,1,?,?)",
+            (app["id"], payload.username, _hash_password(payload.password), plan, expires_at, _now_iso()),
         )
 
         # Link license to user if provided
@@ -969,9 +988,12 @@ def sdk_auth(payload: AuthPayload):
             search_key = _normalize(payload.key)
             if search_key.startswith("RinoxAuth-"):
                 search_key = search_key[10:]
-            user = conn.execute("SELECT id FROM users WHERE username=?", (payload.username,)).fetchone()
+            user = conn.execute("SELECT id FROM users WHERE username=? AND application_id = ?", (payload.username, app["id"])).fetchone()
             if user:
-                conn.execute("UPDATE licenses SET user_id=? WHERE license_key=?", (user["id"], search_key))
+                conn.execute(
+                    "UPDATE licenses SET user_id=? WHERE license_key=? AND application_id = ?",
+                    (user["id"], search_key, app["id"]),
+                )
 
         _log_activity(conn, "register", "info", f"SDK Registration: {payload.username}")
         conn.commit()
@@ -1141,7 +1163,14 @@ def get_dashboard_stats():
 def get_users():
     """Get all users"""
     conn = _db()
-    rows = conn.execute("SELECT * FROM users ORDER BY id DESC").fetchall()
+    rows = conn.execute(
+        """
+        SELECT u.*, a.name AS application_name
+        FROM users u
+        LEFT JOIN applications a ON a.id = u.application_id
+        ORDER BY u.id DESC
+        """
+    ).fetchall()
     conn.close()
     return _success("ok", [_user_to_dict(r) for r in rows])
 
@@ -1149,6 +1178,14 @@ def get_users():
 def create_user(payload: UserCreatePayload):
     """Create a new user"""
     conn = _db()
+
+    if payload.app_id is None:
+        conn.close()
+        return _error("Application is required", 400)
+
+    if not conn.execute("SELECT id FROM applications WHERE id = ?", (payload.app_id,)).fetchone():
+        conn.close()
+        return _error("Application not found", 404)
 
     if conn.execute(
         "SELECT id FROM users WHERE username = ?", (payload.username,)
@@ -1164,10 +1201,11 @@ def create_user(payload: UserCreatePayload):
 
     conn.execute(
         """
-        INSERT INTO users (username, password_hash, email, plan, is_active, hwid_lock, expires_at, created_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+        INSERT INTO users (application_id, username, password_hash, email, plan, is_active, hwid_lock, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)
         """,
         (
+            payload.app_id,
             payload.username,
             _hash_password(payload.password),
             payload.email or "",
@@ -1269,9 +1307,10 @@ def get_licenses():
     conn = _db()
     rows = conn.execute(
         """
-        SELECT l.*, u.username as uname
+        SELECT l.*, u.username as uname, a.name as application_name
         FROM licenses l
         LEFT JOIN users u ON u.id = l.user_id
+        LEFT JOIN applications a ON a.id = l.application_id
         ORDER BY l.id DESC
         """
     ).fetchall()
@@ -1280,6 +1319,8 @@ def get_licenses():
     return _success("ok", [
         {
             "id": row["id"],
+            "application_id": row["application_id"],
+            "application_name": row["application_name"] or "Unknown",
             "key": row["license_key"],
             "plan": row["plan"] or "standard",
             "issued_to": row["issued_to"] or row["uname"] or "",
@@ -1298,6 +1339,14 @@ def get_licenses():
 def create_license(payload: LicenseCreatePayload):
     """Create a new license"""
     conn = _db()
+
+    if payload.app_id is None:
+        conn.close()
+        return _error("Application is required", 400)
+
+    if not conn.execute("SELECT id FROM applications WHERE id = ?", (payload.app_id,)).fetchone():
+        conn.close()
+        return _error("Application not found", 404)
 
     key_value = _normalize(payload.key) if payload.key else None
     if not key_value:
@@ -1319,10 +1368,11 @@ def create_license(payload: LicenseCreatePayload):
 
     conn.execute(
         """
-        INSERT INTO licenses (license_key, user_id, issued_to, plan, device_limit, expires_at, is_lifetime, is_active, hwid_lock, note, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        INSERT INTO licenses (application_id, license_key, user_id, issued_to, plan, device_limit, expires_at, is_lifetime, is_active, hwid_lock, note, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
         """,
         (
+            payload.app_id,
             key_value,
             payload.user_id,
             _normalize(payload.issued_to),
@@ -1404,8 +1454,17 @@ def delete_license(license_id: int):
 def get_apps():
     """Get all applications"""
     conn = _db()
-    user_count = conn.execute("SELECT COUNT(*) as c FROM users WHERE is_active = 1").fetchone()["c"]
-    rows = conn.execute("SELECT * FROM applications ORDER BY id DESC").fetchall()
+    rows = conn.execute(
+        """
+        SELECT a.*, (
+            SELECT COUNT(*)
+            FROM users u
+            WHERE u.application_id = a.id AND u.is_active = 1
+        ) AS user_count
+        FROM applications a
+        ORDER BY a.id DESC
+        """
+    ).fetchall()
     conn.close()
 
     return _success("ok", [
@@ -1414,7 +1473,7 @@ def get_apps():
             "name": row["name"],
             "owner_id": row["owner_id"],
             "status": "active" if row["is_active"] else "inactive",
-            "users": user_count,
+            "users": row["user_count"],
             "version": row["version"],
         }
         for row in rows
