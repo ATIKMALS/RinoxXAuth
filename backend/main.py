@@ -173,6 +173,7 @@ class AppCreatePayload(BaseModel):
     app_name: str
     version: str = "1.0.0"
     owner_id: Optional[str] = None
+    created_by: Optional[str] = None
 
 class AuthPayload(BaseModel):
     """SDK Auth payload for C#/C++/Python clients"""
@@ -390,6 +391,7 @@ def _init_db() -> None:
             app_secret TEXT NOT NULL,
             version TEXT NOT NULL,
             is_active INTEGER NOT NULL DEFAULT 1,
+            created_by TEXT,
             created_at TEXT NOT NULL
         );
     """)
@@ -435,6 +437,13 @@ def _init_db() -> None:
             conn.execute("ALTER TABLE api_keys ADD COLUMN application_id INTEGER")
     except Exception as e:
         print(f"⚠️ API key migration: {e}")
+
+    try:
+        app_cols = {r["name"] for r in conn.execute("PRAGMA table_info(applications)").fetchall()}
+        if "created_by" not in app_cols:
+            conn.execute("ALTER TABLE applications ADD COLUMN created_by TEXT")
+    except Exception as e:
+        print(f"⚠️ Applications migration: {e}")
 
     try:
         reseller_cols = {r["name"] for r in conn.execute("PRAGMA table_info(resellers)").fetchall()}
@@ -539,10 +548,10 @@ def _init_db() -> None:
         app_secret = _make_hash()
         conn.execute(
             """
-            INSERT INTO applications (app_id, name, owner_id, app_key, app_secret, version, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            INSERT INTO applications (app_id, name, owner_id, app_key, app_secret, version, is_active, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
             """,
-            (app_id, "RinoxAuth", owner_id, app_key, app_secret, "2.0.0", _now_iso()),
+            (app_id, "RinoxAuth", owner_id, app_key, app_secret, "2.0.0", DEFAULT_ADMIN_USERNAME, _now_iso()),
         )
         _log_activity(conn, "system", "info", f"Default application created: RinoxAuth (owner: {owner_id})")
 
@@ -1451,20 +1460,35 @@ def delete_license(license_id: int):
 # ============================================
 
 @app.get("/api/apps")
-def get_apps():
-    """Get all applications"""
+def get_apps(created_by: Optional[str] = None):
+    """Get applications for the current user"""
     conn = _db()
-    rows = conn.execute(
-        """
-        SELECT a.*, (
-            SELECT COUNT(*)
-            FROM users u
-            WHERE u.application_id = a.id AND u.is_active = 1
-        ) AS user_count
-        FROM applications a
-        ORDER BY a.id DESC
-        """
-    ).fetchall()
+    if created_by:
+        rows = conn.execute(
+            """
+            SELECT a.*, (
+                SELECT COUNT(*)
+                FROM users u
+                WHERE u.application_id = a.id AND u.is_active = 1
+            ) AS user_count
+            FROM applications a
+            WHERE a.created_by = ?
+            ORDER BY a.id DESC
+            """,
+            (created_by,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT a.*, (
+                SELECT COUNT(*)
+                FROM users u
+                WHERE u.application_id = a.id AND u.is_active = 1
+            ) AS user_count
+            FROM applications a
+            ORDER BY a.id DESC
+            """
+        ).fetchall()
     conn.close()
 
     return _success("ok", [
@@ -1502,13 +1526,22 @@ def create_app(payload: AppCreatePayload):
 
     conn.execute(
         """
-        INSERT INTO applications (app_id, name, owner_id, app_key, app_secret, version, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+        INSERT INTO applications (app_id, name, owner_id, app_key, app_secret, version, is_active, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
         """,
-        (app_id, name, owner_id, app_key, app_secret, payload.version or "1.0.0", _now_iso()),
+        (
+            app_id,
+            name,
+            owner_id,
+            app_key,
+            app_secret,
+            payload.version or "1.0.0",
+            _normalize(payload.created_by) or None,
+            _now_iso(),
+        ),
     )
 
-    _log_activity(conn, "admin", "info", f"Application created: {name} (owner: {owner_id})")
+    _log_activity(conn, "admin", "info", f"Application created: {name} (owner: {owner_id}, created_by: {payload.created_by or 'unknown'})")
     conn.commit()
     conn.close()
 
@@ -1537,7 +1570,7 @@ def get_app_credentials(app_id: str):
         "app_key": row["app_key"],
         "app_secret": row["app_secret"],
         "version": row["version"],
-        "client_portal": "https://rinoxxauth.onrender.com",
+        "client_portal": "http://127.0.0.1:8000",
     })
 
 @app.delete("/api/admin/apps/{app_id}")
