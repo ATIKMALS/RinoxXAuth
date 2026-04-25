@@ -101,6 +101,7 @@ export default async function UsersPage() {
 
   const userExportRows = users.map((u: any) => [
     u.username,
+    u.application_name || "Unknown",
     u.email ?? "",
     u.plan ?? "",
     u.expires_at?.slice?.(0, 10) ?? "",
@@ -124,7 +125,7 @@ export default async function UsersPage() {
         <div className="flex items-center gap-3">
           <ExportCsvButton
             filename={`users-${new Date().toISOString().slice(0, 10)}.csv`}
-            headers={["Username", "Email", "Plan", "Expires", "Status", "HWID"]}
+            headers={["Username", "Application", "Email", "Plan", "Expires", "Status", "HWID"]}
             rows={userExportRows}
             label="Export CSV"
           />
@@ -171,6 +172,7 @@ export default async function UsersPage() {
             <thead>
               <tr className="border-b border-zinc-800/50 bg-zinc-900/50">
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">User</th>
+                <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Application</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Plan</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Devices</th>
                 <th className="px-4 py-3.5 text-left text-xs font-semibold text-zinc-400 uppercase">Expires</th>
@@ -206,6 +208,9 @@ export default async function UsersPage() {
                           <p className="text-xs text-zinc-500">{user.email || "No email"}</p>
                         </div>
                       </div>
+                    </td>
+                    <td className="px-4 py-4">
+                      <span className="text-sm text-zinc-400">{user.application_name || "Unknown"}</span>
                     </td>
                     <td className="px-4 py-4">
                       <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold uppercase border ${
