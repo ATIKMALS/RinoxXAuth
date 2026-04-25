@@ -296,10 +296,12 @@ def _log_activity(
 # ============================================
 
 def _init_db() -> None:
-    """Initialize database with all required tables and default data"""
+    """Initialize database with all required tables"""
     conn = _db()
 
-    # Create all tables
+    # ============================================
+    # CREATE ALL TABLES
+    # ============================================
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -463,63 +465,8 @@ def _init_db() -> None:
     conn.commit()
 
     # ============================================
-    # DEFAULT DATA
+    # DEFAULT SETTINGS ONLY (NO DEMO DATA)
     # ============================================
-
-    # Create default admin user
-    if not conn.execute(
-        "SELECT id FROM users WHERE username = ?", (DEFAULT_ADMIN_USERNAME,)
-    ).fetchone():
-        conn.execute(
-            """
-            INSERT INTO users (username, password_hash, email, plan, is_active, hwid_lock, expires_at, created_at)
-            VALUES (?, ?, ?, 'enterprise', 1, 1, ?, ?)
-            """,
-            (
-                DEFAULT_ADMIN_USERNAME,
-                _hash_password(DEFAULT_ADMIN_PASSWORD),
-                "mdatikurrohoman524860@gmail.com",
-                (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat(),
-                _now_iso(),
-            ),
-        )
-        _log_activity(conn, "system", "info", "Default admin user created")
-        print(f"✅ Default admin created: {DEFAULT_ADMIN_USERNAME}")
-
-    # Create default license key
-    if not conn.execute(
-        "SELECT id FROM licenses WHERE license_key = ?", (DEFAULT_LICENSE_KEY,)
-    ).fetchone():
-        user = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (DEFAULT_ADMIN_USERNAME,)
-        ).fetchone()
-        conn.execute(
-            """
-            INSERT INTO licenses (license_key, user_id, plan, device_limit, expires_at, is_lifetime, is_active, created_at)
-            VALUES (?, ?, 'standard', 1, ?, 0, 1, ?)
-            """,
-            (
-                DEFAULT_LICENSE_KEY,
-                user["id"] if user else None,
-                (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
-                _now_iso(),
-            ),
-        )
-        _log_activity(conn, "system", "info", f"Default license created: {DEFAULT_LICENSE_KEY}")
-
-    # Create default reseller
-    if not conn.execute(
-        "SELECT id FROM resellers WHERE username = ?", ("partner-alpha",)
-    ).fetchone():
-        conn.execute(
-            """
-            INSERT INTO resellers (username, email, credits, users_created, is_active, created_at)
-            VALUES (?, ?, 100, 0, 1, ?)
-            """,
-            ("partner-alpha", "partner@example.com", _now_iso()),
-        )
-
-    # Create default settings
     default_settings = [
         ("app_name", "RinoxAuth"),
         ("theme", "dark"),
@@ -537,30 +484,13 @@ def _init_db() -> None:
                 "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                 (key, value, _now_iso()),
             )
-
-    # Create default application
-    if not conn.execute(
-        "SELECT id FROM applications WHERE name = ?", ("RinoxAuth",)
-    ).fetchone():
-        app_id = f"app_{secrets.token_hex(4)}"
-        owner_id = secrets.token_hex(4)
-        app_key = _make_hash()
-        app_secret = _make_hash()
-        conn.execute(
-            """
-            INSERT INTO applications (app_id, name, owner_id, app_key, app_secret, version, is_active, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-            """,
-            (app_id, "RinoxAuth", owner_id, app_key, app_secret, "2.0.0", DEFAULT_ADMIN_USERNAME, _now_iso()),
-        )
-        _log_activity(conn, "system", "info", f"Default application created: RinoxAuth (owner: {owner_id})")
-
     conn.commit()
     conn.close()
     print("✅ Database initialized successfully!")
     print(f"   📁 DB Path: {DB_PATH}")
-    print(f"   👤 Admin: {DEFAULT_ADMIN_USERNAME}")
-    print(f"   🔑 License: {DEFAULT_LICENSE_KEY}")
+    print(f"   ⚠️  No default users/licenses - Register via /api/auth/register-admin")       
+
+   
 
 
 # ============================================
@@ -1576,7 +1506,7 @@ def get_app_credentials(app_id: str):
         "app_key": row["app_key"],
         "app_secret": row["app_secret"],
         "version": row["version"],
-        "client_portal": "http://127.0.0.1:8000",
+        "client_portal": "https://rinoxxauth.onrender.com",
     })
 
 @app.delete("/api/admin/apps/{app_id}")
@@ -1935,10 +1865,10 @@ if __name__ == "__main__":
     print("🚀 RinoxAuth Backend v2.0.0")
     print("=" * 60)
     print(f"   📁 Database: {DB_PATH}")
-    print(f"   👤 Admin: {DEFAULT_ADMIN_USERNAME}")
     print(f"   🌐 CORS: {CORS_ORIGINS}")
     print(f"   📡 Server: http://0.0.0.0:8000")
     print(f"   📚 Docs: http://0.0.0.0:8000/docs")
+    print(f"   ⚠️  No default data - First user must register")
     print("=" * 60)
 
     uvicorn.run(
