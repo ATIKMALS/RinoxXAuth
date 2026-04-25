@@ -1196,11 +1196,15 @@ def create_user(payload: UserCreatePayload):
         conn.close()
         return _error("Application not found", 404)
 
-    if conn.execute(
-        "SELECT id FROM users WHERE username = ?", (payload.username,)
-    ).fetchone():
+    # ✅ FIX: Check if THIS APPLICATION already has a user with this username
+    existing = conn.execute(
+        "SELECT id FROM users WHERE username = ? AND application_id = ?",
+        (payload.username, payload.app_id),
+    ).fetchone()
+    
+    if existing:
         conn.close()
-        return _error("Username already exists", 409)
+        return _error("Username already exists in this application", 409)
 
     # Calculate expiry
     if payload.expires_in_seconds and payload.expires_in_seconds > 0:
@@ -1508,16 +1512,18 @@ def create_app(payload: AppCreatePayload):
     """Create a new application"""
     conn = _db()
     name = _normalize(payload.app_name)
+    created_by = _normalize(payload.created_by) or None
 
     if not name:
         conn.close()
         return _error("Application name is required", 400)
 
     if conn.execute(
-        "SELECT id FROM applications WHERE lower(name) = lower(?)", (name,)
+        "SELECT id FROM applications WHERE lower(name) = lower(?) AND (created_by = ? OR (created_by IS NULL AND ? IS NULL))",
+        (name, created_by, created_by),
     ).fetchone():
         conn.close()
-        return _error("Application already exists", 409)
+        return _error("You already have an application with this name", 409)
 
     app_id = f"app_{secrets.token_hex(4)}"
     owner_id = secrets.token_hex(4)
@@ -1536,12 +1542,12 @@ def create_app(payload: AppCreatePayload):
             app_key,
             app_secret,
             payload.version or "1.0.0",
-            _normalize(payload.created_by) or None,
+            created_by,
             _now_iso(),
         ),
     )
 
-    _log_activity(conn, "admin", "info", f"Application created: {name} (owner: {owner_id}, created_by: {payload.created_by or 'unknown'})")
+    _log_activity(conn, "admin", "info", f"Application created: {name} (owner: {owner_id}, created_by: {created_by or 'unknown'})")
     conn.commit()
     conn.close()
 
