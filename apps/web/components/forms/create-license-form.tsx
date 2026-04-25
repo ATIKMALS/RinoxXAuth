@@ -25,11 +25,13 @@ export function CreateLicenseForm({ onClose, onSuccess }: CreateLicenseFormProps
   const [apps, setApps] = useState<AppRecord[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  
+  // ✅ FIXED: Use CLIENT_BACKEND_BASE_URL for fetching apps
   const fetchApps = useCallback(async () => {
     try {
       setIsLoadingApps(true);
       setFetchError(null);
-      const res = await fetch("/api/apps");
+      const res = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps`);
       if (!res.ok) throw new Error(`Failed (${res.status})`);
       const data = await res.json();
       const list = data.data || data || [];
@@ -129,7 +131,7 @@ export function CreateLicenseForm({ onClose, onSuccess }: CreateLicenseFormProps
                 <select value={formData.app_id} onChange={(e) => setFormData({ ...formData, app_id: e.target.value })}
                   disabled={isLoadingApps}
                   className={`w-full rounded-xl border bg-zinc-800/50 pl-10 pr-10 py-2.5 text-sm text-white backdrop-blur-sm focus:outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 ${errors.app_id ? "border-red-500/50" : "border-zinc-700/50 focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/20"}`}>
-                  <option value="" className="bg-zinc-900 text-zinc-500">{isLoadingApps ? "Loading..." : apps.length === 0 ? "No apps" : "Select application"}</option>
+                  <option value="" className="bg-zinc-900 text-zinc-500">{isLoadingApps ? "Loading..." : apps.length === 0 ? "No apps - Create one first" : "Select application"}</option>
                   {apps.map(a => <option key={a.id} value={a.id} className="bg-zinc-900 text-white">{a.name} (v{a.version})</option>)}
                 </select>
                 {isLoadingApps && <Loader2 className="absolute right-10 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 animate-spin" />}
@@ -176,7 +178,7 @@ export function CreateLicenseForm({ onClose, onSuccess }: CreateLicenseFormProps
             </div>
           </div>
 
-          {/* ✅ HWID Lock */}
+          {/* HWID Lock */}
           <label className="flex items-center gap-3 p-3 rounded-xl border border-zinc-700/50 bg-zinc-800/30 cursor-pointer hover:border-indigo-500/30 transition-all">
             <input type="checkbox" checked={formData.hwid_lock} onChange={(e) => setFormData({ ...formData, hwid_lock: e.target.checked })}
               className="rounded border-zinc-600 bg-zinc-800 text-indigo-500" />
