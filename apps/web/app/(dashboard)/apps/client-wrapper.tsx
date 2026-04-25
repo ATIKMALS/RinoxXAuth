@@ -16,7 +16,12 @@ interface AppRecord {
   users: number;
 }
 
-export function AppsClientWrapper({ apps }: { apps: AppRecord[] }) {
+interface AppsClientWrapperProps {
+  apps: AppRecord[];
+  currentUser?: string | null;
+}
+
+export function AppsClientWrapper({ apps, currentUser }: AppsClientWrapperProps) {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
@@ -75,7 +80,7 @@ export function AppsClientWrapper({ apps }: { apps: AppRecord[] }) {
           const res = await fetch("/api/admin/apps", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ app_name: appName, version }),
+            body: JSON.stringify({ app_name: appName, version, created_by: currentUser }),
           });
           if (res.ok) imported++;
           else failed++;
@@ -136,7 +141,7 @@ export function AppsClientWrapper({ apps }: { apps: AppRecord[] }) {
 
       {/* Create App Modal */}
       <Modal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} title="Create New Application" size="md">
-        <CreateAppForm onClose={() => setIsCreateModalOpen(false)} onSuccess={handleCreateSuccess} />
+        <CreateAppForm onClose={() => setIsCreateModalOpen(false)} onSuccess={handleCreateSuccess} createdBy={currentUser || undefined} />
       </Modal>
 
       {/* Credentials Modal */}
