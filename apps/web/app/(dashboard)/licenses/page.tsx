@@ -6,10 +6,13 @@ import {
 } from "lucide-react";
 import { LicensesClientWrapper } from "./client-wrapper";
 import { CopyButton } from "./copy-button";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 
-async function getApps() {
+async function getApps(createdBy?: string) {
   try {
-    const res = await fetch(`${env.BACKEND_BASE_URL}/api/apps`, { cache: "no-store" });
+    const query = createdBy ? `?created_by=${encodeURIComponent(createdBy)}` : "";
+    const res = await fetch(`${env.BACKEND_BASE_URL}/api/apps${query}`, { cache: "no-store" });
     if (!res.ok) return [];
     const data = await res.json();
     return data.data || [];
@@ -26,7 +29,9 @@ async function getLicenses() {
 }
 
 export default async function LicensesPage() {
-  const [licenses, apps] = await Promise.all([getLicenses(), getApps()]);
+  const session = await getServerSession(authOptions);
+  const currentUser = session?.user?.username;
+  const [licenses, apps] = await Promise.all([getLicenses(), getApps(currentUser)]);
   const activeLicenses = licenses.filter((l: any) => l.status === "active").length;
   const expiredLicenses = licenses.filter((l: any) => l.status === "expired" || (l.expires_at && new Date(l.expires_at) < new Date())).length;
   const revokedLicenses = licenses.filter((l: any) => l.status === "revoked").length;
