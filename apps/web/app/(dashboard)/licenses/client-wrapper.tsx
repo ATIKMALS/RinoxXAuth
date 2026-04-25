@@ -9,6 +9,7 @@ import { ExportCsvButton } from "@/components/ui/export-csv-button";
 
 interface LicenseRecord {
   id: number;
+  application_name?: string;
   key: string;
   plan: string;
   issued_to?: string;
@@ -35,6 +36,7 @@ export function LicensesClientWrapper({ licenses }: { licenses: LicenseRecord[] 
     () =>
       licenses.map((l) => [
         l.key,
+        l.application_name || "Unknown",
         l.plan,
         l.status,
         l.expires_at,
@@ -60,7 +62,7 @@ export function LicensesClientWrapper({ licenses }: { licenses: LicenseRecord[] 
             </button>
             <ExportCsvButton
               filename={`licenses-${new Date().toISOString().slice(0, 10)}.csv`}
-              headers={["License key", "Plan", "Status", "Expires", "Device limit", "Note", "HWID"]}
+              headers={["License key", "Application", "Plan", "Status", "Expires", "Device limit", "Note", "HWID"]}
               rows={exportRows}
               label="Export"
             />
