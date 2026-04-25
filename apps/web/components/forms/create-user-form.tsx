@@ -78,21 +78,25 @@ export function CreateUserForm({ onClose, onSuccess }: CreateUserFormProps) {
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    
+
+    if (!formData.app_id) {
+      newErrors.app_id = "Please select an application";
+    }
+
     // ✅ Username - minimum 1 character (changed from 3)
     if (!formData.username || formData.username.length < 1) {
       newErrors.username = "Username is required";
     }
-    
+
     // ✅ Password - minimum 1 character (changed from 6)
     if (!formData.password || formData.password.length < 1) {
       newErrors.password = "Password is required";
     }
-    
+
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = "Invalid email format";
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
