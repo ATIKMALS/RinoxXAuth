@@ -43,9 +43,16 @@ export function CreateUserForm({ onClose, onSuccess }: CreateUserFormProps) {
       setIsLoadingApps(true);
       setFetchError(null);
       
-      // ✅ FIXED: Get ALL active apps (no created_by filter)
-      const response = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps`);
+      // ✅ Get current user from session
+      const sessionRes = await fetch('/api/auth/session');
+      const sessionData = await sessionRes.json().catch(() => ({}));
+      const currentUser = sessionData?.user?.username || '';
+      
+      // ✅ Send created_by to filter apps
+      const query = currentUser ? `?created_by=${encodeURIComponent(currentUser)}` : '';
+      const response = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps${query}`);
 
+      // ✅ Check if response is OK
       if (!response.ok) throw new Error(`Failed (${response.status})`);
 
       const data = await response.json();
