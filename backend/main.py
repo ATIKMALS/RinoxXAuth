@@ -307,7 +307,7 @@ def _init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             application_id INTEGER,
-            username NOT NULL,
+            username TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             email TEXT,
             plan TEXT NOT NULL DEFAULT 'free',
@@ -319,7 +319,7 @@ def _init_db() -> None:
             last_login TEXT,
             devices INTEGER DEFAULT 0,
             notes TEXT,
-            FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE SET NULL
+            FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE SET NULL,
             UNIQUE(application_id, username)
         );
 
