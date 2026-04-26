@@ -93,6 +93,7 @@ class LoginPayload(BaseModel):
     """Web login payload"""
     username: str
     password: str
+    app_id: Optional[int] = None
 
 class UserCreatePayload(BaseModel):
     """Create user payload"""
@@ -306,7 +307,7 @@ def _init_db() -> None:
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             application_id INTEGER,
-            username TEXT UNIQUE NOT NULL,
+            username TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             email TEXT,
             plan TEXT NOT NULL DEFAULT 'free',
@@ -396,6 +397,16 @@ def _init_db() -> None:
             created_by TEXT,
             created_at TEXT NOT NULL
         );
+                       
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            expires_at TEXT NOT NULL,
+            used INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
     """)
 
     conn.commit()
@@ -484,7 +495,16 @@ def _init_db() -> None:
                 "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
                 (key, value, _now_iso()),
             )
-    conn.commit()
+    try:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_app_username 
+            ON users(application_id, username)
+        """)
+        conn.commit()
+        print("✅ Unique index created for users(application_id, username)")
+    except Exception as e:
+        print(f"⚠️ Index creation: {e}")
+
     conn.close()
     print("✅ Database initialized successfully!")
     print(f"   📁 DB Path: {DB_PATH}")
@@ -622,12 +642,29 @@ def on_startup():
 # ============================================
 
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    """Log all incoming requests"""
-    start_time = datetime.now(timezone.utc)
+async def application_isolation_middleware(request: Request, call_next):
+    """Ensure users only access their own application's data"""
+    
+    # Skip isolation for these paths
+    skip_paths = [
+        "/docs", "/redoc", "/openapi.json", "/health", "/",
+        "/api/auth/login", "/api/auth/oauth-session", 
+        "/api/auth/forgot-password", "/api/auth/reset-password",
+        "/api/auth/verify-api-key", "/api/auth/reseller-login",
+        "/api/auth", "/api/settings"  # SDK auth has its own checks
+    ]
+    
+    if any(request.url.path.startswith(path) for path in skip_paths):
+        return await call_next(request)
+    
+    # Get application_id from header (frontend should send this)
+    app_id = request.headers.get("X-Application-Id")
+    
+    if app_id:
+        # Store in request state for use in endpoints
+        request.state.application_id = app_id
+    
     response = await call_next(request)
-    duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
-    print(f"📡 {request.method} {request.url.path} → {response.status_code} ({duration:.1f}ms)")
     return response
 
 # ============================================
@@ -883,7 +920,7 @@ def sdk_auth(payload: AuthPayload):
             },
         }
 
-    # ============================================
+        # ============================================
     # TYPE: REGISTER (Fixed)
     # ============================================
     if req_type == "register":
@@ -891,12 +928,15 @@ def sdk_auth(payload: AuthPayload):
             conn.close()
             return _error("Username and password required", 400)
 
-        # Check if username exists for this app
-        if conn.execute("SELECT id FROM users WHERE username=? AND application_id = ?", (payload.username, app["id"])).fetchone():
+        # Check username exists for THIS application only
+        if conn.execute(
+            "SELECT id FROM users WHERE username=? AND application_id = ?", 
+            (payload.username, app["id"])
+        ).fetchone():
             conn.close()
-            return _error("Username already exists", 409)
+            return _error("Username already exists in this application", 409)
 
-        # If license key provided, validate it
+        # If license key provided, validate it for this application
         if payload.key:
             search_key = _normalize(payload.key)
             if search_key.startswith("RinoxAuth-"):
@@ -909,7 +949,7 @@ def sdk_auth(payload: AuthPayload):
 
             if not lic:
                 conn.close()
-                return _error("Invalid license key", 400)
+                return _error("Invalid license key for this application", 400)
 
             plan = lic["plan"] or "free"
         else:
@@ -918,7 +958,7 @@ def sdk_auth(payload: AuthPayload):
         expires_at = (datetime.now(timezone.utc) + timedelta(days=3650)).isoformat()
 
         conn.execute(
-            "INSERT INTO users (application_id, username,password_hash,plan,is_active,hwid_lock,expires_at,created_at) VALUES (?,?,?,?,1,1,?,?)",
+            "INSERT INTO users (application_id, username, password_hash, plan, is_active, hwid_lock, expires_at, created_at) VALUES (?, ?, ?, ?, 1, 1, ?, ?)",
             (app["id"], payload.username, _hash_password(payload.password), plan, expires_at, _now_iso()),
         )
 
@@ -927,7 +967,10 @@ def sdk_auth(payload: AuthPayload):
             search_key = _normalize(payload.key)
             if search_key.startswith("RinoxAuth-"):
                 search_key = search_key[10:]
-            user = conn.execute("SELECT id FROM users WHERE username=? AND application_id = ?", (payload.username, app["id"])).fetchone()
+            user = conn.execute(
+                "SELECT id FROM users WHERE username=? AND application_id = ?", 
+                (payload.username, app["id"])
+            ).fetchone()
             if user:
                 conn.execute(
                     "UPDATE licenses SET user_id=? WHERE license_key=? AND application_id = ?",
@@ -944,6 +987,12 @@ def sdk_auth(payload: AuthPayload):
             "token": secrets.token_hex(32),
         }
 
+    # ============================================
+    # UNKNOWN TYPE
+    # ============================================
+    conn.close()
+    return _error(f"Unknown request type: {payload.type}", 400)
+
 # ============================================
 # WEB AUTH ENDPOINTS
 # ============================================
@@ -953,10 +1002,17 @@ def web_login(payload: LoginPayload):
     """Web dashboard login endpoint"""
     conn = _db()
 
-    user = conn.execute(
-        "SELECT * FROM users WHERE username = ? AND is_active = 1",
-        (payload.username,),
-    ).fetchone()
+    # If app_id provided, filter by it
+    if payload.app_id:
+        user = conn.execute(
+            "SELECT * FROM users WHERE username = ? AND application_id = ? AND is_active = 1",
+            (payload.username, payload.app_id),
+        ).fetchone()
+    else:
+        user = conn.execute(
+            "SELECT * FROM users WHERE username = ? AND is_active = 1",
+            (payload.username,),
+        ).fetchone()
 
     if not user or not _verify_password(payload.password, user["password_hash"]):
         conn.close()
@@ -1051,22 +1107,34 @@ def oauth_session(payload: OAuthSessionPayload):
 # ============================================
 
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats():
-    """Get dashboard statistics"""
+def get_dashboard_stats(app_id: Optional[int] = None):
+    """Get dashboard statistics - optionally filtered by application"""
     conn = _db()
 
-    total_users = conn.execute(
-        "SELECT COUNT(*) as c FROM users WHERE is_active = 1"
-    ).fetchone()["c"]
-
-    active_users = conn.execute(
-        "SELECT COUNT(*) as c FROM users WHERE is_active = 1 AND datetime(expires_at) > datetime(?)",
-        (_now_iso(),),
-    ).fetchone()["c"]
-
-    total_licenses = conn.execute(
-        "SELECT COUNT(*) as c FROM licenses WHERE is_active = 1"
-    ).fetchone()["c"]
+    if app_id:
+        total_users = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE is_active = 1 AND application_id = ?",
+            (app_id,)
+        ).fetchone()["c"]
+        active_users = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE is_active = 1 AND application_id = ? AND datetime(expires_at) > datetime(?)",
+            (app_id, _now_iso()),
+        ).fetchone()["c"]
+        total_licenses = conn.execute(
+            "SELECT COUNT(*) as c FROM licenses WHERE is_active = 1 AND application_id = ?",
+            (app_id,)
+        ).fetchone()["c"]
+    else:
+        total_users = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE is_active = 1"
+        ).fetchone()["c"]
+        active_users = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE is_active = 1 AND datetime(expires_at) > datetime(?)",
+            (_now_iso(),),
+        ).fetchone()["c"]
+        total_licenses = conn.execute(
+            "SELECT COUNT(*) as c FROM licenses WHERE is_active = 1"
+        ).fetchone()["c"]
 
     failed_logins = conn.execute(
         "SELECT COUNT(*) as c FROM activity_logs WHERE severity = 'error' AND datetime(created_at) >= datetime(?, '-1 day')",
@@ -1099,17 +1167,31 @@ def get_dashboard_stats():
 # ============================================
 
 @app.get("/api/users")
-def get_users():
-    """Get all users"""
+def get_users(app_id: Optional[int] = None, request: Request = None):
+    """Get users - optionally filtered by application"""
     conn = _db()
-    rows = conn.execute(
-        """
-        SELECT u.*, a.name AS application_name
-        FROM users u
-        LEFT JOIN applications a ON a.id = u.application_id
-        ORDER BY u.id DESC
-        """
-    ).fetchall()
+    
+    if app_id:
+        rows = conn.execute(
+            """
+            SELECT u.*, a.name AS application_name
+            FROM users u
+            LEFT JOIN applications a ON a.id = u.application_id
+            WHERE u.application_id = ?
+            ORDER BY u.id DESC
+            """,
+            (app_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT u.*, a.name AS application_name
+            FROM users u
+            LEFT JOIN applications a ON a.id = u.application_id
+            ORDER BY u.id DESC
+            """
+        ).fetchall()
+    
     conn.close()
     return _success("ok", [_user_to_dict(r) for r in rows])
 
@@ -1245,18 +1327,33 @@ def delete_user(user_id: int):
 # ============================================
 
 @app.get("/api/licenses")
-def get_licenses():
-    """Get all licenses"""
+def get_licenses(app_id: Optional[int] = None):
+    """Get all licenses - optionally filtered by application"""
     conn = _db()
-    rows = conn.execute(
-        """
-        SELECT l.*, u.username as uname, a.name as application_name
-        FROM licenses l
-        LEFT JOIN users u ON u.id = l.user_id
-        LEFT JOIN applications a ON a.id = l.application_id
-        ORDER BY l.id DESC
-        """
-    ).fetchall()
+    
+    if app_id:
+        rows = conn.execute(
+            """
+            SELECT l.*, u.username as uname, a.name as application_name
+            FROM licenses l
+            LEFT JOIN users u ON u.id = l.user_id
+            LEFT JOIN applications a ON a.id = l.application_id
+            WHERE l.application_id = ?
+            ORDER BY l.id DESC
+            """,
+            (app_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT l.*, u.username as uname, a.name as application_name
+            FROM licenses l
+            LEFT JOIN users u ON u.id = l.user_id
+            LEFT JOIN applications a ON a.id = l.application_id
+            ORDER BY l.id DESC
+            """
+        ).fetchall()
+    
     conn.close()
 
     return _success("ok", [
@@ -1394,9 +1491,11 @@ def delete_license(license_id: int):
 # ============================================
 
 @app.get("/api/apps")
-def get_apps(created_by: Optional[str] = None):
-    """Get applications for the current user"""
+def get_apps(created_by: Optional[str] = None, request: Request = None):
+    """Get applications - filtered by creator"""
     conn = _db()
+    
+    # If created_by is provided, filter by it
     if created_by:
         rows = conn.execute(
             """
@@ -1412,6 +1511,7 @@ def get_apps(created_by: Optional[str] = None):
             (created_by,),
         ).fetchall()
     else:
+        # Return all active applications (admin view)
         rows = conn.execute(
             """
             SELECT a.*, (
@@ -1420,9 +1520,11 @@ def get_apps(created_by: Optional[str] = None):
                 WHERE u.application_id = a.id AND u.is_active = 1
             ) AS user_count
             FROM applications a
+            WHERE a.is_active = 1
             ORDER BY a.id DESC
             """
         ).fetchall()
+    
     conn.close()
 
     return _success("ok", [
@@ -1530,24 +1632,43 @@ def delete_app(app_id: str):
 # ============================================
 
 @app.get("/api/analytics")
-def get_analytics():
-    """Get analytics data"""
+def get_analytics(app_id: Optional[int] = None):
+    """Get analytics data - optionally filtered by application"""
     conn = _db()
 
-    total_users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
-    active_licenses = conn.execute("SELECT COUNT(*) as c FROM licenses WHERE is_active = 1").fetchone()["c"]
-    expired_licenses = conn.execute(
-        "SELECT COUNT(*) as c FROM licenses WHERE is_lifetime = 0 AND datetime(expires_at) < datetime(?)",
-        (_now_iso(),),
-    ).fetchone()["c"]
-    login_activity_24h = conn.execute(
-        "SELECT COUNT(*) as c FROM activity_logs WHERE category = 'login' AND datetime(created_at) >= datetime(?, '-1 day')",
-        (_now_iso(),),
-    ).fetchone()["c"]
-
-    growth_rows = conn.execute(
-        "SELECT substr(created_at, 1, 10) as day, COUNT(*) as count FROM users GROUP BY day ORDER BY day DESC LIMIT 8"
-    ).fetchall()
+    if app_id:
+        total_users = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE application_id = ?", (app_id,)
+        ).fetchone()["c"]
+        active_licenses = conn.execute(
+            "SELECT COUNT(*) as c FROM licenses WHERE is_active = 1 AND application_id = ?", (app_id,)
+        ).fetchone()["c"]
+        expired_licenses = conn.execute(
+            "SELECT COUNT(*) as c FROM licenses WHERE is_lifetime = 0 AND application_id = ? AND datetime(expires_at) < datetime(?)",
+            (app_id, _now_iso()),
+        ).fetchone()["c"]
+        login_activity_24h = conn.execute(
+            "SELECT COUNT(*) as c FROM activity_logs WHERE category = 'login' AND datetime(created_at) >= datetime(?, '-1 day')",
+            (_now_iso(),),
+        ).fetchone()["c"]
+        growth_rows = conn.execute(
+            "SELECT substr(created_at, 1, 10) as day, COUNT(*) as count FROM users WHERE application_id = ? GROUP BY day ORDER BY day DESC LIMIT 8",
+            (app_id,)
+        ).fetchall()
+    else:
+        total_users = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
+        active_licenses = conn.execute("SELECT COUNT(*) as c FROM licenses WHERE is_active = 1").fetchone()["c"]
+        expired_licenses = conn.execute(
+            "SELECT COUNT(*) as c FROM licenses WHERE is_lifetime = 0 AND datetime(expires_at) < datetime(?)",
+            (_now_iso(),),
+        ).fetchone()["c"]
+        login_activity_24h = conn.execute(
+            "SELECT COUNT(*) as c FROM activity_logs WHERE category = 'login' AND datetime(created_at) >= datetime(?, '-1 day')",
+            (_now_iso(),),
+        ).fetchone()["c"]
+        growth_rows = conn.execute(
+            "SELECT substr(created_at, 1, 10) as day, COUNT(*) as count FROM users GROUP BY day ORDER BY day DESC LIMIT 8"
+        ).fetchall()
 
     conn.close()
 
