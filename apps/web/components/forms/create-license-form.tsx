@@ -31,8 +31,14 @@ export function CreateLicenseForm({ onClose, onSuccess }: CreateLicenseFormProps
       setIsLoadingApps(true);
       setFetchError(null);
       
-      // ✅ FIXED: Get ALL active apps (no created_by filter)
-      const res = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps`);
+      // Get current user from session
+      const sessionRes = await fetch('/api/auth/session');
+      const sessionData = await sessionRes.json().catch(() => ({}));
+      const currentUser = sessionData?.user?.username || '';
+      
+      // Send created_by to filter apps for current user
+      const query = currentUser ? `?created_by=${encodeURIComponent(currentUser)}` : '';
+      const res = await fetch(`${CLIENT_BACKEND_BASE_URL}/api/apps${query}`);
       
       if (!res.ok) throw new Error(`Failed (${res.status})`);
       const data = await res.json();
